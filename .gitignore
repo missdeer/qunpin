@@ -3,6 +3,7 @@
 *.pdb
 *.ilk
 *.res
+*.pyc
 
 # Packages
 *.egg
