@@ -2,7 +2,9 @@
 
 import os
 import sys
+import urllib
 import argparse
+from urlparse import parse_qs
 
 # Include the Dropbox SDK libraries
 from dropbox import client, rest, session
@@ -13,34 +15,39 @@ APP_KEY = 'egsenb3c6k0t1bh'
 APP_SECRET = 'rhhj1hwjzb0v4ha'
 # ACCESS_TYPE should be 'dropbox' or 'app_folder' as configured for your app
 ACCESS_TYPE = 'app_folder'
+# save access keys
+KEYS_FILENAME = "keys.txt"
 
 
 class DropBoxClient(object):
-    def __init__(self, key, sec):
+    def set_keys(self, fin):
+        dat = parse_qs(fin.readline().strip())
         # key and sec are got from auth
         sess = session.DropboxSession(APP_KEY, APP_SECRET, ACCESS_TYPE)
-        sess.set_token(key, sec)
+        sess.set_token(dat['access_token'][0], dat['access_token_secret'][0])
         self.client = client.DropboxClient(sess)
         #print "linked account:", client.account_info()
 
-    def auth(self):
+    def auth(self, fout):
         sess = session.DropboxSession(APP_KEY, APP_SECRET, ACCESS_TYPE)
         request_token = sess.obtain_request_token()
         url = sess.build_authorize_url(request_token)
         # Make the user sign in and authorize this token
-        print "url:", url
         print "Please visit this website and press the",
         print "'Allow' button, then hit 'Enter' here."
+        print "url:", url
         raw_input()
         try:
             # will fail if the user didn't visit the above URL and hit 'Allow'
             access_token = sess.obtain_access_token(request_token)
-            print "please save these for the account"
-            print "key:", repr(access_token.key)
-            print "sec:", repr(access_token.secret)
-
-            client = client.DropboxClient(sess)
-            print "linked account:", client.account_info()
+            #print "please save these for the account"
+            #print "key:", repr(access_token.key)
+            #print "sec:", repr(access_token.secret)
+            #client = client.DropboxClient(sess)
+            #print "linked account:", client.account_info()
+            data = {'access_token': access_token.key,
+                    'access_token_secret': access_token.secret}
+            fout.write(urllib.urlencode(data))
         except Exception:
             print >> sys.stderr, "Failed to get access token"
 
@@ -80,11 +87,22 @@ def main():
 
     args = parser.parse_args()
 
-    if args.upload or args.delete or args.query or args.auth:
-        clt = DropBoxClient('5k9obasoquq0qhv', '3av8u8gcvepe547')
-    else:
-        parser.print_help()
+    if not os.path.isfile(KEYS_FILENAME):
+        print >> sys.stderr, "Can not find", KEYS_FILENAME
+        print >> sys.stderr, "you have run '--auth ", KEYS_FILENAME
+        print >> sys.stderr, "'generate first"
         sys.exit(1)
+
+    clt = DropBoxClient()
+
+    if args.auth:
+        if args.auth == '-':
+            clt.auth(sys.stdout)
+        else:
+            clt.auth(open(args.auth, 'w'))
+        sys.exit(0)
+
+    clt.set_keys(open(KEYS_FILENAME))
 
     if args.upload:
         clt.upload(args.upload)
@@ -92,8 +110,6 @@ def main():
         clt.delete(args.delete)
     elif args.query:
         clt.query(args.query)
-    elif args.auth:
-        clt.query(args.auth)
     else:
         parser.print_help()
 
