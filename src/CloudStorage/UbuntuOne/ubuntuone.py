@@ -119,6 +119,8 @@ class UbuntuOneClient(object):
         mime = guess_type(name)
         if not mime or not mime[0]:
             mime = "text/plain"
+        else:
+            mime = mime[0]
         self.put("PUT", url, mime, open(filename))
 
 

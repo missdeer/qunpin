@@ -19,4 +19,3 @@ How to auth with google drive:
   it can not redirect to http://localhost:8080/oauth , don't be panic, just see the url  
   and search the code=xxxxxxxxxxxxxxxxxxxxxxxxxxx, this is what you need
 * copy/paste that xxxxxxxxxxxxxxxxxxx and press "Enter"
-

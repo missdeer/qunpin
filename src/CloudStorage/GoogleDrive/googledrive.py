@@ -4,14 +4,18 @@ import os
 import sys
 import json
 import base64
-import urllib
 import urllib2
 import httplib
 import argparse
+from hashlib import md5
 from getpass import getpass
+from urllib import urlencode
 from mimetypes import guess_type
 from urlparse import urlparse, parse_qs
 from datetime import datetime, timedelta
+from email.mime.multipart import MIMEMultipart
+from email.mime.nonmultipart import MIMENonMultipart
+from pprint import pprint
 
 
 KEYS_FILENAME = 'keys.txt'
@@ -29,6 +33,16 @@ class GoogleDriveClient(object):
         #print res.reason
         #print res.getheaders()
         return ret
+
+    def auth_http(self, act, url, data="", hd={}):
+        host = urlparse(url)[1]
+        conn = httplib.HTTPSConnection(host)
+        if 'authorization' not in hd:
+            a = self.token['token_type'] + " " + self.token['access_token']
+            hd['authorization'] = a
+        conn.request(act, url, data, hd)
+        res = conn.getresponse()
+        return res
 
     def check_auth(self, infn):
         if not os.path.isfile(infn):
@@ -63,40 +77,39 @@ class GoogleDriveClient(object):
 
     def refresh_token(self):
         url = "https://accounts.google.com/o/oauth2/token"
-        data = urllib.urlencode({
-                                "refresh_token": self.token['refresh_token'],
-                                "client_id": self.web['client_id'],
-                                "client_secret": self.web['client_secret'],
-                                "grant_type": "refresh_token",
-                                })
+        data = urlencode({"refresh_token": self.token['refresh_token'],
+                          "client_id": self.web['client_id'],
+                          "client_secret": self.web['client_secret'],
+                          "grant_type": "refresh_token",
+                         })
         ret = self.http("POST", url, data,
                         {"Content-Type": "application/x-www-form-urlencoded"})
         self._update_token(ret)
 
     def acquire_token(self, infn):
         self.token = json.load(open(infn))
+        web = self.token['web']
         pa = {
             "response_type": "code",
-            "client_id": t['web']['client_id'],
+            "client_id": web['client_id'],
             "redirect_uri": "http://localhost:8080/oauth",
             "state": "QunPin",
             "access_type": "offline",
             "scope": ("https://www.googleapis.com/auth/drive "
+                      "https://www.googleapis.com/auth/drive.file "
                       "https://www.googleapis.com/auth/userinfo.email "
                       "https://www.googleapis.com/auth/userinfo.profile")
             }
         print "Visit this url, input the code:"
         print "https://accounts.google.com/o/oauth2/auth?" + urlencode(pa)
         code = raw_input("code:")
-        web = self.token['web']
         url = "https://accounts.google.com/o/oauth2/token"
-        data = urllib.urlencode({
-                                "code": code,
-                                "client_id": web['client_id'],
-                                "client_secret": web['client_secret'],
-                                "redirect_uri": "http://localhost:8080/oauth",
-                                "grant_type": "authorization_code",
-                                })
+        data = urlencode({"code": code,
+                          "client_id": web['client_id'],
+                          "client_secret": web['client_secret'],
+                          "redirect_uri": "http://localhost:8080/oauth",
+                          "grant_type": "authorization_code",
+                         })
         ret = self.http("POST", url, data,
                         {"Content-Type": "application/x-www-form-urlencoded"})
         self._update_token(ret)
@@ -112,17 +125,27 @@ class GoogleDriveClient(object):
         # can not use contain, it is a bug:
         # http://stackoverflow.com/questions/12695434/
         # google-drive-title-contains-query-not-working-as-expected
-        q = urllib.urlencode({#"q": "title contains 'bcd'",
-                              "maxResults": limit})
+        q = urlencode({#"q": "title contains 'bcd'",
+                       "maxResults": limit})
         files = self._query(q)
         for info in files:
             if word in info['title'] and info["kind"] == "drive#file":
-                print info['title']
+                pprint({"title": info['title'], "file_id": info['id']})
+
+    def auth_http(self, act, url, data="", hd={}):
+        host = urlparse(url)[1]
+        conn = httplib.HTTPSConnection(host)
+        if 'authorization' not in hd:
+            a = self.token['token_type'] + " " + self.token['access_token']
+            hd['authorization'] = a
+        conn.request(act, url, data, hd)
+        res = conn.getresponse()
+        return res
 
     def delete(self, filename):
         name = os.path.basename(filename)
-        q = urllib.urlencode({"q": "title = '%s'" % name.replace("'", r"\'"),
-                              "maxResults": 2})
+        q = urlencode({"q": "title = '%s'" % name.replace("'", r"\'"),
+                       "maxResults": 2})
         try:
             files = self._query(q)
             fid = files[0]['id']
@@ -130,18 +153,44 @@ class GoogleDriveClient(object):
             print >> sys.stderr, name, "not found"
             sys.exit(1)
         url = "https://www.googleapis.com/drive/v2/files/" + fid
-        a = self.token['token_type'] + " " + self.token['access_token']
-        ret = self.http("DELETE", url, "", {"authorization": a})
-        print ret
+        #a = self.token['token_type'] + " " + self.token['access_token']
+        #ret = self.http("DELETE", url, "", {"authorization": a})
+        ret = self.auth_http("DELETE", url).read()
+        pprint(ret)
 
     def upload(self, filename):
         name = os.path.basename(filename)
-        url = ("https://files.one.ubuntu.com/content"
-               "/~/Ubuntu%20One/" + urllib.quote(name))
-        mime = guess_type(name)
-        if not mime or not mime[0]:
-            mime = "text/plain"
-        self.put("PUT", url, mime, open(filename))
+        size = os.path.getsize(filename)
+        cype = guess_type(name)
+        if not cype or not cype[0]:
+            cype = "text/plain"
+        else:
+            cype = cype[0]
+
+        url = ("https://www.googleapis.com/upload/drive/v2/files?"
+               "uploadType=multipart")
+
+        message = MIMEMultipart('mixed')
+        # Message should not write out it's own headers.
+        setattr(message, '_write_headers', lambda self: None)
+
+        msg = MIMENonMultipart('application', 'json; charset=UTF-8')
+        msg.set_payload(json.dumps({"title": name,  #.replace("'", r"\'"),
+                                    "mimeType": cype}))
+        message.attach(msg)
+
+        msg = MIMENonMultipart(*cype.split('/'))
+        msg.add_header("Content-Transfer-Encoding", "binary")
+        msg.set_payload(open(filename).read())
+        message.attach(msg)
+        
+        body = message.as_string()
+        bd = message.get_boundary()
+        hd = {"Content-Type": 'multipart/related; boundary="%s"' % bd}
+        res = self.auth_http("POST", url, body, hd)
+        ret = res.read()
+        pprint(ret)
+        return 
 
 
 def main():
