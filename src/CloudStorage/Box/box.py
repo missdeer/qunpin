@@ -4,16 +4,10 @@ import os
 import re
 import sys
 import json
-import base64
-import urllib2
 import httplib
 import argparse
-from hashlib import md5
-from getpass import getpass
-from urllib import urlencode
+from urlparse import urlparse
 from mimetypes import guess_type
-from urlparse import urlparse, parse_qs
-from datetime import datetime, timedelta
 from email.mime.multipart import MIMEMultipart
 from email.mime.nonmultipart import MIMENonMultipart
 from pprint import pprint
@@ -38,7 +32,8 @@ class BoxClient(object):
     def check_auth(self, infn):
         self.token = json.load(open(infn))
         if not self.token.get("auth_token"):
-            print >> sys.stderr, "Has no auth_token, you should run --auth first"
+            print >> sys.stderr, "Has no auth_token,",
+            print >> sys.stderr, "you should run --auth first"
             sys.exit(1)
 
     def acquire_token(self, infn):
@@ -66,45 +61,69 @@ class BoxClient(object):
         self.token['auth_token'] = auth
         json.dump(self.token, open(infn, 'w'))
 
-    def query(self, word, limit=100):
-        # can not use contain, it is a bug:
-        # http://stackoverflow.com/questions/12695434/
-        # google-drive-title-contains-query-not-working-as-expected
-        q = urlencode({#"q": "title contains 'bcd'",
-                       "maxResults": limit})
-        files = self._query(q)
-        for info in files:
-            if word in info['title'] and info["kind"] == "drive#file":
-                pprint({"title": info['title'], "file_id": info['id']})
-
     def auth_http(self, act, url, data="", hd={}):
         host = urlparse(url)[1]
         conn = httplib.HTTPSConnection(host)
         if 'authorization' not in hd:
-            a = self.token['token_type'] + " " + self.token['access_token']
-            hd['authorization'] = a
+            hd['authorization'] = ("BoxAuth api_key=%(api_key)s&"
+                                   "auth_token=%(auth_token)s" % self.token)
         conn.request(act, url, data, hd)
         res = conn.getresponse()
         return res
 
+    def _query(self, word, limit=100):
+        # https://api.box.com/2.0/folders/FOLDER_ID/items
+        # parameter: fileds, limit, offset
+        # {"total_count":1,
+        #  "entries":[{"type":"file",
+        #              "id":"3663038953",
+        #              "sequence_id":"1",
+        #              "etag":"27d1999ed12adeb1739d47b1093019920aad7fd9",
+        #              "name":"abcd.txt.webdoc"}]}
+        url = "https://api.box.com/2.0/folders/0/items"
+        ret = self.auth_http("GET", url).read()
+        #print ret
+        fs = []
+        for entry in json.loads(ret)['entries']:
+            if word in entry['name'] and entry["type"] == "file":
+                fs.append(entry)
+                #pprint(entry)
+        return fs
+
+    def query(self, word, limit=100):
+        fs = self._query(word, limit)
+        if fs:
+            pprint(fs)
+
+    def get_info(self, name):
+        fs = self._query(name)
+        for f in fs:
+            if f['name'] == name:
+                return f
+        return None
+
+    def _delete(self, entry):
+        url = "https://api.box.com/2.0/files/" + entry['id']
+        hd = {"If-Match": entry['etag']}
+        ret = self.auth_http("DELETE", url, "", hd).read()
+        print ret.strip(),
+
     def delete(self, filename):
+        # https://api.box.com/2.0/files/FILE_ID
+        # query etag first
         name = os.path.basename(filename)
-        q = urlencode({"q": "title = '%s'" % name.replace("'", r"\'"),
-                       "maxResults": 2})
-        try:
-            files = self._query(q)
-            fid = files[0]['id']
-        except (KeyError, IndexError), e:
-            print >> sys.stderr, name, "not found"
+        entry = self.get_info(name)
+        if not entry:
+            print >> sys.stderr, "Not exists file", name
             sys.exit(1)
-        url = "https://www.googleapis.com/drive/v2/files/" + fid
-        #a = self.token['token_type'] + " " + self.token['access_token']
-        #ret = self.http("DELETE", url, "", {"authorization": a})
-        ret = self.auth_http("DELETE", url).read()
-        pprint(ret)
+        self._delete(entry)
 
     def upload(self, filename):
         name = os.path.basename(filename)
+        entry = self.get_info(name)
+        if entry:
+            self._delete(entry)
+        #print "after check"
         size = os.path.getsize(filename)
         cype = guess_type(name)
         if not cype or not cype[0]:
@@ -112,30 +131,35 @@ class BoxClient(object):
         else:
             cype = cype[0]
 
-        url = ("https://www.googleapis.com/upload/drive/v2/files?"
-               "uploadType=multipart")
+        url = "https://api.box.com/2.0/files/content"
 
         message = MIMEMultipart('mixed')
         # Message should not write out it's own headers.
         setattr(message, '_write_headers', lambda self: None)
 
-        msg = MIMENonMultipart('application', 'json; charset=UTF-8')
-        msg.set_payload(json.dumps({"title": name,  #.replace("'", r"\'"),
-                                    "mimeType": cype}))
-        message.attach(msg)
-
         msg = MIMENonMultipart(*cype.split('/'))
-        msg.add_header("Content-Transfer-Encoding", "binary")
+        msg.add_header('Content-Disposition',
+                       'form-data; name="f"; filename="%s"' % name)
+        del msg["MIME-Version"]
         msg.set_payload(open(filename).read())
         message.attach(msg)
-        
+
+        msg = MIMENonMultipart("text", "plain")
+        msg.add_header('Content-Disposition', 'form-data; name="folder_id"')
+        del msg["Content-Type"]
+        del msg["MIME-Version"]
+        msg.set_payload('0')
+        message.attach(msg)
+
         body = message.as_string()
+        #print body
+        #return
         bd = message.get_boundary()
-        hd = {"Content-Type": 'multipart/related; boundary="%s"' % bd}
+        hd = {"Content-Type": "multipart/form-data; boundary=%s" % bd}
         res = self.auth_http("POST", url, body, hd)
         ret = res.read()
-        pprint(ret)
-        return 
+
+        print(json.loads(ret)["entries"][0]['name'])
 
 
 def main():
