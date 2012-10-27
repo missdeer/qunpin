@@ -1,12 +1,14 @@
 Dropbox:
 ===============================
+URL: https://www.dropbox.com/home
 Usage:
-dropbox [option path]
+dropbox.py [option path]
 * option:
-* --auth,   -A filename  get authorise from UbuntuOne user, save keys in file
+* --auth,   -A filename  get authorise from DropBox user, save keys in file
 * --upload, -U filename  Upload local file to Dropbox cloud storage service  
 * --delete, -D filename  Delete the file in Dropbox cloud storage service  
 * --query,  -Q keyword   Query the file by keyword in Dropbox cloud storage service  
+* --fetch,  -F filename  Download file from Dropbox cloud storage service  
 
 
 Need use --auth to get authorise from dropbox user, save key and sec

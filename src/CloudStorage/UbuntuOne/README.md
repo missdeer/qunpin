@@ -1,12 +1,14 @@
 UbuntuOne:
 ===============================
+URL: https://one.ubuntu.com/dashboard/ , https://login.ubuntu.com/+applications
 Usage:
-dropbox [option path]
+ubuntuone.py [option path]
 * option:
 * --auth,   -A filename  get authorise from UbuntuOne user, save keys in file  
-* --upload, -U filename  Upload local file to Dropbox cloud storage service  
-* --delete, -D filename  Delete the file in Dropbox cloud storage service  
-* --query,  -Q keyword   Query the file by keyword in Dropbox cloud storage service  
+* --upload, -U filename  Upload local file to UbuntuOne cloud storage service  
+* --delete, -D filename  Delete the file in UbuntuOne cloud storage service  
+* --query,  -Q keyword   Query the file by keyword in UbuntuOne cloud storage service  
+* --fetch,  -F filename  Download file from UbuntuOne cloud storage service  
 
 
 Need use --auth to get authorise from user, save keys in file  

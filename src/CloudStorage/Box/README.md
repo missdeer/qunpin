@@ -1,12 +1,14 @@
 Box:
 ===============================
+URL: https://www.box.com/files
 Usage:
-googledrive [option path]  
+box.py [option path]  
 * option:
-* --upload, -U filename  Upload local file to Google Drive cloud storage service   
-* --delete, -D filename  Delete the file in Google Drive cloud storage service  
-* --query,  -Q keyword   Query the file by keyword in Google Drive cloud storage service  
-* -- auth,  -A filename  get authorise from GoogleDrive user, save keys in file  
+* --upload, -U filename  Upload local file to Box cloud storage service   
+* --delete, -D filename  Delete the file in Box storage service  
+* --query,  -Q keyword   Query the file by keyword in Box cloud storage service  
+* --auth,   -A filename  get authorise from Box user, save keys in file  
+* --fetch,  -F filename  get file from Box user
 
 How to auth with box:
 * Register App at http://box.com/developers/services/edit/

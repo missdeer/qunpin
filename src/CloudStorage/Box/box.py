@@ -69,6 +69,9 @@ class BoxClient(object):
                                    "auth_token=%(auth_token)s" % self.token)
         conn.request(act, url, data, hd)
         res = conn.getresponse()
+        #print res.status
+        #print res.reason
+        #print res.getheaders()
         return res
 
     def _query(self, word, limit=100):
@@ -101,6 +104,19 @@ class BoxClient(object):
             if f['name'] == name:
                 return f
         return None
+
+    def fetch(self, filename):
+        name = os.path.basename(filename)
+        info = self.get_info(name)
+        if not info:
+            print >> sys.stderr, "Can not found file", name
+            sys.exit(1)
+        url = "https://api.box.com/2.0/files/" + info['id'] + "/content"
+        res = self.auth_http("GET", url)
+        url = res.getheader("location", "")
+        if res.status == 302 and url:
+            res = self.auth_http("GET", url)
+        sys.stdout.write(res.read())
 
     def _delete(self, entry):
         url = "https://api.box.com/2.0/files/" + entry['id']
@@ -164,10 +180,11 @@ class BoxClient(object):
 
 def main():
     parser = argparse.ArgumentParser(description="Use command line to "
-                                                 "control GoogleDrive")
+                                                 "control Box")
     group = parser.add_mutually_exclusive_group()
-    group.add_argument("--auth", "-A", help="Authorise by google drive user")
+    group.add_argument("--auth", "-A", help="Authorise by Box user")
     group.add_argument("--query", "-Q", help="Query file by key word")
+    group.add_argument("--fetch", "-F", help="Download a file")
     group.add_argument("--upload", "-U", help="Upload a file")
     group.add_argument("--delete", "-D", help="Delete a file")
 
@@ -178,7 +195,7 @@ def main():
         clt.acquire_token(KEYS_FILENAME)
         sys.exit(0)
 
-    if args.upload or args.delete or args.query:
+    if args.upload or args.delete or args.query or args.fetch:
         clt.check_auth(KEYS_FILENAME)
     else:
         parser.print_help()
@@ -190,6 +207,8 @@ def main():
         clt.delete(args.delete)
     elif args.query:
         clt.query(args.query)
+    elif args.fetch:
+        clt.fetch(args.fetch)
     else:
         parser.print_help()
 

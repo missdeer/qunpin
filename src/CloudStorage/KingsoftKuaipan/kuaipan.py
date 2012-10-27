@@ -1,4 +1,5 @@
 #! /usr/bin/python
+#coding:utf-8
 
 import os
 import sys
@@ -22,20 +23,24 @@ class Unauthorized(Exception):
     """The provided email address and password were incorrect."""
 
 
-class UbuntuOneClient(object):
+class KuaiPanClient(object):
     def set_tokens(self, fin):
-        dat = parse_qs(fin.readline().strip())
-        self.consumer = oauth2.Consumer(dat['oauth_consumer_key'][0],
-                                        dat['oauth_consumer_secret'][0])
-        dat = parse_qs(fin.readline().strip())
-        self.token = oauth2.Token(dat['oauth_token'][0],
-                                  dat['oauth_token_secret'][0])
+        dat = json.load(fin)
+        for k in ('consumer_key', 'consumer_secret',
+                  'oauth_token', 'oauth_token_secret'):
+            if not dat.get(k):
+                print >> sys.stderr, "Please run '--auth keys.txt' first"
+                sys.exit(1)
+        self.consumer = oauth2.Consumer(dat['consumer_key'],
+                                        dat['consumer_secret'])
+        self.token = oauth2.Token(dat['oauth_token'],
+                                  dat['oauth_token_secret'])
 
     def sign_url(self, url):
         dat = urlparse(url)
         oauth_request = oauth2.Request.from_consumer_and_token(self.consumer,
                                            self.token, 'GET', url)
-        oauth_request.sign_request(oauth2.SignatureMethod_PLAINTEXT(),
+        oauth_request.sign_request(oauth2.SignatureMethod_HMAC_SHA1(),
                                    self.consumer, self.token)
         return oauth_request, dat[1]
 
@@ -47,49 +52,68 @@ class UbuntuOneClient(object):
         response = urllib2.urlopen(request)
         return response.read()
 
-    def acquire_token(self, email_address, password, fout=sys.stdout):
+    def acquire_token(self, fout=sys.stdout):
         """Aquire an OAuth access token for the given user."""
+        print "Please register to Kuaipan and get",
+        print "consumer_key and consumer_secret, then input here:"
+        consumer_key = raw_input("consumer_key:")
+        consumer_secret = raw_input("consumer_secret:")
+        self.consumer = oauth2.Consumer(consumer_key, consumer_secret)
         # Issue a new access token for the user.
-        request = urllib2.Request(
-            'https://login.ubuntu.com/api/1.0/authentications?' +
-            urllib.urlencode({'ws.op': 'authenticate',
-                              'token_name': 'Ubuntu One @ ubuntu [qunpin]'}))
-        request.add_header('Accept', 'application/json')
-        request.add_header('Authorization', 'Basic %s' % base64.b64encode(
-                           '%s:%s' % (email_address, password)))
-        try:
-            response = urllib2.urlopen(request)
-        except urllib2.HTTPError, exc:
-            if exc.code == 401:     # Unauthorized
-                raise Unauthorized("Bad email address or password")
-            else:
-                raise
-        data = json.load(response)
-        self.consumer = oauth2.Consumer(data['consumer_key'],
-                                        data['consumer_secret'])
-        self.token = oauth2.Token(data['token'], data['token_secret'])
+        self.token = None
+        url = "https://openapi.kuaipan.cn/open/requestToken"
+        req, host = self.sign_url(url)
+        res = urllib2.urlopen(req.to_url())
+        dat = json.load(res)
+        print "Please visit this url, then 'Enter'"
+        print ("https://www.kuaipan.cn/api.php?ac=open&op=authorise"
+               "&oauth_token=" + dat['oauth_token'])
+        raw_input()
+        # try to fetch access token
+        self.token = oauth2.Token(dat['oauth_token'],
+                                  dat['oauth_token_secret'])
+        url = "https://openapi.kuaipan.cn/open/accessToken"
+        req, host = self.sign_url(url)
+        res = urllib2.urlopen(req.to_url())
+        dat = json.load(res)
+        self.token = oauth2.Token(dat['oauth_token'],
+                                  dat['oauth_token_secret'])
 
-        # Tell Ubuntu One about the new token.
-        self.get('https://one.ubuntu.com/oauth/sso-finished-so-get-tokens/')
-        fout.write(str(self.consumer))
-        fout.write("\n")
-        fout.write(self.token.to_string())
-        fout.write("\n")
+        dat["consumer_key"] = consumer_key
+        dat["consumer_secret"] = consumer_secret
+        fout.write(json.dumps(dat))
 
     def query(self, word):
-        res = self.get("https://one.ubuntu.com/api/file_storage/"
-                       "v1/~/Ubuntu%20One?include_children=true")
-        data = json.loads(res)
-        #print data['children'][0]['content_path']
-        for child in data['children']:
-            if child.get('kind') != 'file':
+        req, host = self.sign_url("https://openapi.kuaipan.cn/1/"
+                                  "metadata/app_folder/")
+        res = urllib2.urlopen(req.to_url())
+        data = json.load(res)
+        print data
+        for f in data['files']:
+            if f.get('type') != 'file' or f.get('is_deleted'):
                 continue
-            fn = child.get('content_path')
+            fn = f.get('name')
             if not fn:
                 continue
             fn = os.path.basename(fn)
             if word and word in fn:
                 print fn
+
+    def fetch(self, filename):
+        # get download locate
+        res = urllib2.urlopen("http://api-content.dfs.kuaipan.cn"
+                              "/1/fileops/upload_locate")
+        print res.read()
+        return
+
+        name = os.path.basename(filename)
+        req, host = self.sign_url("https://api-content.dfs.kuaipan.cn"
+                                  "/1/fileops/download_file")
+        url = req.to_url() + "&" + urllib.urlencode({"root": "app_folder",
+                                                     "path": name})
+        print url
+        res = urllib2.urlopen(url)
+        print res.read()
 
     def put(self, act, url, mime="", data=""):
         sreq, host = self.sign_url(url)
@@ -123,14 +147,6 @@ class UbuntuOneClient(object):
             mime = mime[0]
         self.put("PUT", url, mime, open(filename))
 
-    def fetch(self, filename):
-        #/api/file_storage/v1/(content_path)
-        name = os.path.basename(filename)
-        url = ("https://files.one.ubuntu.com/content"
-               "/~/Ubuntu%20One/" + urllib.quote(name))
-        res = self.get(url)
-        sys.stdout.write(res)
-
 
 def main():
     parser = argparse.ArgumentParser(description="Use command line to "
@@ -143,26 +159,14 @@ def main():
     group.add_argument("--fetch", "-F", help="Download a file")
 
     args = parser.parse_args()
-    clt = UbuntuOneClient()
+    clt = KuaiPanClient()
 
     if args.auth:
-        #if not os.path.isfile(KEYS_FILENAME):
-        #    print >> sys.stderr, "Can not find", KEYS_FILENAME
-        #    print >> sys.stderr, "you have run '--auth ", KEYS_FILENAME
-        #    print >> sys.stderr, "'generate first"
-        #    sys.exit(1)
-
-        print "Please submit  email address and password",
-        print "to verify UbuntiOne account"
-        email = raw_input("email:")
-        passd = getpass()
-        print email
-        print passd
         # should save token into save place
         if args.auth == '-':
-            clt.acquire_token(email, passd)
+            clt.acquire_token()
         else:
-            clt.acquire_token(email, passd, open(args.auth, 'w'))
+            clt.acquire_token(open(args.auth, 'w'))
         sys.exit(0)
 
     if args.upload or args.delete or args.query or args.fetch:

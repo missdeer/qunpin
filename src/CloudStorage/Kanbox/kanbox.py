@@ -3,19 +3,14 @@
 import os
 import sys
 import json
-import base64
-import urllib2
 import httplib
 import argparse
 from hashlib import md5
-from getpass import getpass
-from urllib import urlencode
-from mimetypes import guess_type
-from urlparse import urlparse, parse_qs
-from datetime import datetime, timedelta
-from email.mime.multipart import MIMEMultipart
-from email.mime.nonmultipart import MIMENonMultipart
 from pprint import pprint
+from urllib import urlencode
+from urlparse import urlparse
+from mimetypes import guess_type
+from datetime import datetime, timedelta
 
 
 KEYS_FILENAME = 'keys.txt'
@@ -23,7 +18,9 @@ KEYS_FILENAME = 'keys.txt'
 
 class KanBoxClient(object):     # most like google driver
     def http(self, act, url, data="", hd={}):
-        host = urlparse(url)[1]
+        ret = urlparse(url)
+        h, host = ret[0] + '://' + ret[1], ret[1]
+        path = url[len(h):]
         conn = httplib.HTTPSConnection(host)
         conn.request(act, url, data, hd)
         res = conn.getresponse()
@@ -35,13 +32,20 @@ class KanBoxClient(object):     # most like google driver
         return ret
 
     def auth_http(self, act, url, data="", hd={}):
-        host = urlparse(url)[1]
+        ret = urlparse(url)
+        h, host = ret[0] + '://' + ret[1], ret[1]
+        path = url[len(h):]
         conn = httplib.HTTPSConnection(host)
-        if 'authorization' not in hd:
-            a = self.token['token_type'] + " " + self.token['access_token']
-            hd['authorization'] = a
-        conn.request(act, url, data, hd)
+        if 'Authorization' not in hd:
+            a = "Bearer " + self.token['access_token']
+            hd['Authorization'] = a
+        if 'Host' not in hd:
+            hd['Host'] = host
+        conn.request(act, path, data, hd)
         res = conn.getresponse()
+        #print res.status
+        #print res.reason
+        #print res.getheaders()
         return res
 
     def check_auth(self, infn):
@@ -70,7 +74,8 @@ class KanBoxClient(object):     # most like google driver
         dat = json.loads(ret)
         for k, v in dat.items():
             self.token[k] = v
-        edt = datetime.today() + timedelta(seconds=self.token['expires_in']/2)
+        sec = self.token['expires_in'] / 2
+        edt = datetime.today() + timedelta(seconds=sec)
         self.token['before_this_time'] = edt.strftime("%F %T")
 
     def refresh_token(self):
@@ -106,47 +111,49 @@ class KanBoxClient(object):     # most like google driver
         self._update_token(ret)
         json.dump(self.token, open(infn, 'w'))
 
-    def _query(self, q):
-        url = "https://www.googleapis.com/drive/v2/files?" + q
-        a = self.token['token_type'] + " " + self.token['access_token']
-        ret = self.http("GET", url, "", {"authorization": a})
-        return json.loads(ret)['items']
-        
-    def query(self, word, limit=100):
-        # can not use contain, it is a bug:
-        # http://stackoverflow.com/questions/12695434/
-        # google-drive-title-contains-query-not-working-as-expected
-        q = urlencode({#"q": "title contains 'bcd'",
-                       "maxResults": limit})
-        files = self._query(q)
-        for info in files:
-            if word in info['title'] and info["kind"] == "drive#file":
-                pprint({"title": info['title'], "file_id": info['id']})
+    def download(self, filename):
+        url = "https://api.kanbox.com/0/download/" + filename.lstrip('/')
+        res = self.auth_http("GET", url)
+        """
+        [('x-powered-by', 'PHP/5.2.17'),
+         ('transfer-encoding', 'chunked'),
+         ('server', 'nginx/1.0.5'),
+         ('connection', 'keep-alive'),
+         ('location', 'https://teldl-nj.kanbox.com/gcid2?'
+                      'gcid=B22892B0E0B47D70A6CFEE297B886C2AAD10132A&'
+                      'fn=README.md&userid=68980128&'
+                      'sessionid=2d42a6e4440b492286d270b167eb13cb'),
+         ('date', 'Thu, 25 Oct 2012 00:48:03 GMT'),
+         ('content-type', 'text/html')]
+        """
+        if res.status == 302:
+            res = self.auth_http("GET", res.getheader('location'))
+        print res.read()
 
-    def auth_http(self, act, url, data="", hd={}):
-        host = urlparse(url)[1]
-        conn = httplib.HTTPSConnection(host)
-        if 'authorization' not in hd:
-            a = self.token['token_type'] + " " + self.token['access_token']
-            hd['authorization'] = a
-        conn.request(act, url, data, hd)
-        res = conn.getresponse()
-        return res
+    def query(self, word, limit=100):
+        url = "https://api.kanbox.com/0/list"
+        res = self.auth_http("GET", url)
+        dat = res.read()
+        files = json.loads(dat)['contents']
+        for info in files:
+            name = os.path.basename(info['fullPath'])
+            if word in name and not info['isFolder']:
+                pprint(info)
 
     def delete(self, filename):
         name = os.path.basename(filename)
-        q = urlencode({"q": "title = '%s'" % name.replace("'", r"\'"),
-                       "maxResults": 2})
-        try:
-            files = self._query(q)
-            fid = files[0]['id']
-        except (KeyError, IndexError), e:
-            print >> sys.stderr, name, "not found"
-            sys.exit(1)
-        url = "https://www.googleapis.com/drive/v2/files/" + fid
-        #a = self.token['token_type'] + " " + self.token['access_token']
-        #ret = self.http("DELETE", url, "", {"authorization": a})
-        ret = self.auth_http("DELETE", url).read()
+        # GET http://api.kabnbox.com/delete/pictures/flower.jpg
+        url = "https://api.kanbox.com/0/delete/" + name
+        ret = self.auth_http("GET", url).read()
+        pprint(ret)
+
+    def upload1(self, filename):
+        name = os.path.basename(filename)
+        # kanbox do support this way, which I don't like
+        url = "https://api-upload.kanbox.com/0/upload/" + name
+        body = open(filename).read()
+        res = self.auth_http("POST", url, body)
+        ret = res.read()
         pprint(ret)
 
     def upload(self, filename):
@@ -158,30 +165,23 @@ class KanBoxClient(object):     # most like google driver
         else:
             cype = cype[0]
 
-        url = ("https://www.googleapis.com/upload/drive/v2/files?"
-               "uploadType=multipart")
-
-        message = MIMEMultipart('mixed')
-        # Message should not write out it's own headers.
-        setattr(message, '_write_headers', lambda self: None)
-
-        msg = MIMENonMultipart('application', 'json; charset=UTF-8')
-        msg.set_payload(json.dumps({"title": name,  #.replace("'", r"\'"),
-                                    "mimeType": cype}))
-        message.attach(msg)
-
-        msg = MIMENonMultipart(*cype.split('/'))
-        msg.add_header("Content-Transfer-Encoding", "binary")
-        msg.set_payload(open(filename).read())
-        message.attach(msg)
-        
-        body = message.as_string()
-        bd = message.get_boundary()
-        hd = {"Content-Type": 'multipart/related; boundary="%s"' % bd}
+        url = "https://api-upload.kanbox.com/0/upload/" + name
+        # kanbox not work with MIME lib, it request '\r\n', but lib only '\n'
+        # so we manually construct it here
+        bd = "-----" + md5(filename).hexdigest()
+        body = "\r\n".join(("--" + bd,
+                'Content-Disposition: '
+                'form-data; name="f"; filename="%s"' % name,
+                "Content-Type: %s" % cype,
+                "",
+                open(filename).read(),
+                "",
+                "--%s--" % bd,
+                ))
+        hd = {"Content-Type": "multipart/form-data; boundary=%s" % bd}
         res = self.auth_http("POST", url, body, hd)
         ret = res.read()
-        pprint(ret)
-        return 
+        #pprint(ret)
 
 
 def main():
@@ -190,6 +190,7 @@ def main():
     group = parser.add_mutually_exclusive_group()
     group.add_argument("--auth", "-A", help="Authorise by google drive user")
     group.add_argument("--query", "-Q", help="Query file by key word")
+    group.add_argument("--fetch", "-F", help="Fetch a file")
     group.add_argument("--upload", "-U", help="Upload a file")
     group.add_argument("--delete", "-D", help="Delete a file")
 
@@ -200,7 +201,7 @@ def main():
         clt.acquire_token(KEYS_FILENAME)
         sys.exit(0)
 
-    if args.upload or args.delete or args.query:
+    if args.upload or args.delete or args.query or args.fetch:
         clt.check_auth(KEYS_FILENAME)
     else:
         parser.print_help()
@@ -212,6 +213,8 @@ def main():
         clt.delete(args.delete)
     elif args.query:
         clt.query(args.query)
+    elif args.fetch:
+        clt.download(args.fetch)
     else:
         parser.print_help()
 

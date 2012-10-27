@@ -73,7 +73,13 @@ class DropBoxClient(object):
     def query(self, word):
         ret = self.client.search('/', word, file_limit=1000,
                                  include_deleted=False)
-        print ret
+        for info in ret:
+            if not info['is_dir']:
+                print info['path']
+
+    def fetch(self, filename):
+        req = self.client.get_file(self._remote_path(filename))
+        sys.stdout.write(req.read())
 
 
 def main():
@@ -84,6 +90,7 @@ def main():
     group.add_argument("--upload", "-U", help="Upload a file")
     group.add_argument("--delete", "-D", help="Delete a file")
     group.add_argument("--query", "-Q", help="Query file by key word")
+    group.add_argument("--fetch", "-F", help="Download file")
 
     args = parser.parse_args()
 
@@ -110,6 +117,8 @@ def main():
         clt.delete(args.delete)
     elif args.query:
         clt.query(args.query)
+    elif args.fetch:
+        clt.fetch(args.fetch)
     else:
         parser.print_help()
 
